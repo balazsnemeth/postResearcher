@@ -3,102 +3,160 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Reddit Research Scraper</title>
+  <title>Reddit Scraper</title>
   <link rel="stylesheet" href="style.css">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
 </head>
 <body>
-  <div class="container">
-    <header>
-      <h1>Reddit Research Scraper</h1>
-      <p class="subtitle">Collect and analyze Reddit posts for academic research</p>
-    </header>
-
-    <main>
-      <!-- Scrape Configuration -->
-      <section class="card">
-        <h2>1. Subreddit</h2>
-        <div class="field">
-          <label for="subreddit">Subreddit URL or name</label>
-          <input type="text" id="subreddit" placeholder="e.g. MyBoyfriendIsAI or https://www.reddit.com/r/replika/" />
-          <small>Paste a full Reddit URL or just the subreddit name</small>
+  <div class="app">
+    <nav class="topbar">
+      <div class="topbar-inner">
+        <div class="logo">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><path d="M16 8s-1.5-2-4-2-4 2-4 2"/><line x1="9" y1="15" x2="9.01" y2="15"/><line x1="15" y1="15" x2="15.01" y2="15"/></svg>
+          Reddit Scraper
         </div>
-      </section>
+      </div>
+    </nav>
 
-      <section class="card">
-        <h2>2. Scrape Settings</h2>
-        <div class="field-row">
-          <div class="field">
-            <label>Sort modes</label>
-            <div class="checkbox-group">
-              <label class="checkbox"><input type="checkbox" value="new" checked /> New</label>
-              <label class="checkbox"><input type="checkbox" value="top" checked /> Top (all time)</label>
-              <label class="checkbox"><input type="checkbox" value="hot" checked /> Hot</label>
+    <main class="main">
+      <div class="hero">
+        <h1>Scrape any subreddit</h1>
+        <p>Collect posts and comments for research and analysis. No API keys needed.</p>
+      </div>
+
+      <!-- Subreddit Input -->
+      <div class="input-group">
+        <div class="input-wrapper">
+          <span class="input-prefix">r/</span>
+          <input type="text" id="subreddit" placeholder="subreddit name or full URL" autocomplete="off" spellcheck="false" />
+        </div>
+        <button class="btn-scrape" id="scrapeBtn">Scrape</button>
+        <button class="btn-stop hidden" id="stopBtn">Stop</button>
+      </div>
+
+      <!-- Scrape Options -->
+      <div class="options-panel">
+        <div class="options-header">
+          <h2>Options</h2>
+        </div>
+
+        <div class="options-grid">
+          <!-- Sort Modes -->
+          <div class="option-block">
+            <label class="option-label">Sort by</label>
+            <div class="pill-group" id="sortPills">
+              <button class="pill active" data-value="new">New</button>
+              <button class="pill active" data-value="top">Top</button>
+              <button class="pill active" data-value="hot">Hot</button>
             </div>
           </div>
-          <div class="field">
-            <label for="limit">Posts per sort mode</label>
-            <input type="number" id="limit" value="50" min="1" max="10000" />
-            <small>No hard limit — scrapes in batches. Larger numbers take longer.</small>
+
+          <!-- Post Limit -->
+          <div class="option-block">
+            <label class="option-label" for="limit">Posts per sort</label>
+            <input type="number" id="limit" value="50" min="1" max="10000" class="input-small" />
+          </div>
+
+          <!-- Time Filter (for Top) -->
+          <div class="option-block">
+            <label class="option-label">Time filter (Top)</label>
+            <div class="select-wrapper">
+              <select id="timeFilter">
+                <option value="all" selected>All time</option>
+                <option value="year">Past year</option>
+                <option value="month">Past month</option>
+                <option value="week">Past week</option>
+                <option value="day">Today</option>
+              </select>
+            </div>
           </div>
         </div>
-        <div class="field-row">
-          <label class="checkbox">
-            <input type="checkbox" id="includeComments" checked /> Include comments
+
+        <!-- Toggles -->
+        <div class="toggles-grid">
+          <label class="toggle-switch">
+            <input type="checkbox" id="includeComments" checked />
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">Include comments</span>
           </label>
-          <label class="checkbox">
-            <input type="checkbox" id="skipAnalysis" /> Skip keyword analysis
+
+          <label class="toggle-switch">
+            <input type="checkbox" id="includeSelftext" checked />
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">Include post body text</span>
+          </label>
+
+          <label class="toggle-switch">
+            <input type="checkbox" id="skipNSFW" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">Skip NSFW posts</span>
+          </label>
+
+          <label class="toggle-switch">
+            <input type="checkbox" id="enableKeywords" />
+            <span class="toggle-slider"></span>
+            <span class="toggle-text">Keyword analysis</span>
           </label>
         </div>
-      </section>
 
-      <section class="card collapsible">
-        <h2 class="toggle" data-target="keywords-section">
-          3. Keyword Categories
-          <span class="arrow">&#9660;</span>
-        </h2>
-        <div id="keywords-section" class="collapsed">
-          <p class="hint">Edit the keyword categories used for relevance scoring. One keyword per line.</p>
+        <!-- Keyword Section (hidden by default) -->
+        <div id="keywordsPanel" class="keywords-panel hidden">
+          <div class="keywords-header">
+            <label class="option-label">Keyword categories</label>
+            <button class="btn-text" id="addCategoryBtn">+ Add category</button>
+          </div>
+          <p class="hint">Posts and comments are scored by how many keywords they match. One keyword per line.</p>
           <div id="keyword-editors"></div>
-          <button class="btn btn-secondary" id="addCategoryBtn">+ Add Category</button>
         </div>
-      </section>
-
-      <div class="actions">
-        <button class="btn btn-primary" id="scrapeBtn">Scrape Subreddit</button>
-        <button class="btn btn-stop hidden" id="stopBtn">Stop Scraping</button>
       </div>
 
       <!-- Progress -->
-      <section id="progress" class="card hidden">
-        <h2>Progress</h2>
+      <div id="progress" class="progress-card hidden">
         <div class="progress-bar"><div class="progress-fill" id="progressFill"></div></div>
         <p id="statusText">Starting...</p>
-      </section>
-
-      <!-- Results -->
-      <section id="results" class="card hidden">
-        <h2>Results</h2>
-        <div id="summary" class="summary"></div>
-        <div class="actions">
-          <button class="btn btn-secondary" id="downloadJson">Download Full JSON</button>
-          <button class="btn btn-secondary" id="downloadPostsCsv">Download Posts CSV</button>
-          <button class="btn btn-secondary" id="downloadCommentsCsv">Download Comments CSV</button>
-        </div>
-        <details class="preview-section">
-          <summary>Preview data (first 5 posts)</summary>
-          <div id="preview" class="preview"></div>
-        </details>
-      </section>
+      </div>
 
       <!-- Error -->
-      <section id="error" class="card error-card hidden">
-        <h2>Error</h2>
+      <div id="error" class="error-card hidden">
         <p id="errorText"></p>
-      </section>
+      </div>
+
+      <!-- Results -->
+      <div id="results" class="results-section hidden">
+        <div class="results-header">
+          <h2>Results</h2>
+        </div>
+
+        <div id="summary" class="stats-grid"></div>
+
+        <div class="download-bar">
+          <button class="btn-download" id="downloadCsv">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Posts CSV
+          </button>
+          <button class="btn-download" id="downloadCommentsCsv">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Comments CSV
+          </button>
+          <button class="btn-download" id="downloadJson">
+            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg>
+            Full JSON
+          </button>
+        </div>
+
+        <div class="preview-section">
+          <details>
+            <summary>Preview (first 5 posts)</summary>
+            <div id="preview" class="preview-list"></div>
+          </details>
+        </div>
+      </div>
     </main>
 
     <footer>
-      <p>Built for academic research. Please respect Reddit's API terms of service and rate limits.</p>
+      <p>Uses Reddit's public JSON feed. No API keys or authentication required.</p>
     </footer>
   </div>
 

@@ -1,4 +1,4 @@
-// Default keyword categories (matching config.py)
+// Default keyword categories (optional — only used when keyword analysis is enabled)
 const DEFAULT_KEYWORDS = {
   hiding_secrecy: [
     "hiding", "hidden", "secret", "secretly", "don't tell", "doesn't know",
@@ -31,14 +31,22 @@ const DEFAULT_KEYWORDS = {
 let scrapeResult = null;
 let abortController = null;
 
-// --- Collapsible Sections ---
-document.querySelectorAll(".toggle").forEach((toggle) => {
-  toggle.addEventListener("click", () => {
-    const target = document.getElementById(toggle.dataset.target);
-    const isOpen = !target.classList.contains("collapsed");
-    target.classList.toggle("collapsed", isOpen);
-    toggle.classList.toggle("open", !isOpen);
-  });
+// --- Sort pill toggles ---
+document.querySelectorAll("#sortPills .pill").forEach((pill) => {
+  pill.addEventListener("click", () => pill.classList.toggle("active"));
+});
+
+// --- Keyword toggle ---
+const enableKeywords = document.getElementById("enableKeywords");
+const keywordsPanel = document.getElementById("keywordsPanel");
+
+enableKeywords.addEventListener("change", () => {
+  keywordsPanel.classList.toggle("hidden", !enableKeywords.checked);
+  if (enableKeywords.checked && editorsContainer.children.length === 0) {
+    for (const [name, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
+      createKeywordEditor(name, keywords);
+    }
+  }
 });
 
 // --- Keyword Editors ---
@@ -49,17 +57,13 @@ function createKeywordEditor(name, keywords) {
   div.className = "keyword-editor";
   div.innerHTML = `
     <div class="keyword-editor-header">
-      <input type="text" class="category-name" value="${name}" />
+      <input type="text" class="category-name" value="${escapeHtml(name)}" />
       <button class="remove-category" title="Remove category">Remove</button>
     </div>
     <textarea class="category-keywords">${keywords.join("\n")}</textarea>
   `;
   div.querySelector(".remove-category").addEventListener("click", () => div.remove());
   editorsContainer.appendChild(div);
-}
-
-for (const [name, keywords] of Object.entries(DEFAULT_KEYWORDS)) {
-  createKeywordEditor(name, keywords);
 }
 
 document.getElementById("addCategoryBtn").addEventListener("click", () => {
@@ -126,32 +130,28 @@ function analyzePost(post, categories) {
   return post;
 }
 
-function buildSummary(posts) {
+function buildSummary(posts, keywordsEnabled) {
   const totalComments = posts.reduce((sum, p) => sum + (p.comments?.length || 0), 0);
-  const postsWithMatches = posts.filter((p) => (p.relevance_score || 0) > 0).length;
-  const commentsWithMatches = posts.reduce(
-    (sum, p) => sum + (p.comments || []).filter((c) => (c.relevance_score || 0) > 0).length,
-    0
-  );
-  const categoryCounts = {};
-  for (const p of posts) {
-    for (const cat of p.matched_categories || []) {
-      categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
-    }
-  }
-  const topPosts = [...posts]
-    .sort((a, b) => (b.relevance_score || 0) - (a.relevance_score || 0))
-    .slice(0, 10)
-    .map((p) => ({ title: p.title, score: p.relevance_score, url: p.permalink }));
+  const totalScore = posts.reduce((sum, p) => sum + (p.score || 0), 0);
 
-  return {
+  const summary = {
     total_posts: posts.length,
     total_comments: totalComments,
-    posts_with_keyword_matches: postsWithMatches,
-    comments_with_keyword_matches: commentsWithMatches,
-    posts_per_category: categoryCounts,
-    top_relevant_posts: topPosts,
+    total_score: totalScore,
   };
+
+  if (keywordsEnabled) {
+    summary.posts_with_keyword_matches = posts.filter((p) => (p.relevance_score || 0) > 0).length;
+    const categoryCounts = {};
+    for (const p of posts) {
+      for (const cat of p.matched_categories || []) {
+        categoryCounts[cat] = (categoryCounts[cat] || 0) + 1;
+      }
+    }
+    summary.posts_per_category = categoryCounts;
+  }
+
+  return summary;
 }
 
 // --- Scrape Orchestration ---
@@ -179,7 +179,6 @@ async function apiCall(body) {
 function updateProgress(message, percent = null) {
   statusText.textContent = message;
   if (percent !== null) {
-    progressFill.className = "progress-fill";
     progressFill.style.width = `${Math.min(percent, 100)}%`;
   }
 }
@@ -191,8 +190,8 @@ scrapeBtn.addEventListener("click", async () => {
     return;
   }
 
-  const sortModes = Array.from(document.querySelectorAll(".checkbox-group input:checked")).map(
-    (cb) => cb.value
+  const sortModes = Array.from(document.querySelectorAll("#sortPills .pill.active")).map(
+    (p) => p.dataset.value
   );
   if (sortModes.length === 0) {
     showError("Please select at least one sort mode.");
@@ -201,14 +200,15 @@ scrapeBtn.addEventListener("click", async () => {
 
   const limit = parseInt(document.getElementById("limit").value, 10) || 50;
   const includeComments = document.getElementById("includeComments").checked;
-  const skipAnalysis = document.getElementById("skipAnalysis").checked;
-  const customKeywords = getCustomKeywords();
-  const categories =
-    Object.keys(customKeywords).length > 0 ? customKeywords : DEFAULT_KEYWORDS;
+  const includeSelftext = document.getElementById("includeSelftext").checked;
+  const skipNSFW = document.getElementById("skipNSFW").checked;
+  const keywordsEnabled = document.getElementById("enableKeywords").checked;
+  const timeFilter = document.getElementById("timeFilter").value;
+  const customKeywords = keywordsEnabled ? getCustomKeywords() : {};
+  const categories = Object.keys(customKeywords).length > 0 ? customKeywords : DEFAULT_KEYWORDS;
 
-  // Batch size: smaller when fetching comments (each needs an API call)
   const batchSize = includeComments ? 25 : 100;
-  const totalTarget = limit * sortModes.length; // rough target across all modes
+  const totalTarget = limit * sortModes.length;
 
   // UI state
   abortController = new AbortController();
@@ -217,16 +217,13 @@ scrapeBtn.addEventListener("click", async () => {
   errorSection.classList.add("hidden");
   scrapeBtn.classList.add("hidden");
   stopBtn.classList.remove("hidden");
-  progressFill.className = "progress-fill";
   progressFill.style.width = "0%";
   updateProgress("Starting scrape...");
 
   try {
-    // Batch-scrape each sort mode
     const allPosts = [];
     const seenIds = new Set();
 
-    // Parse subreddit name from URL
     let subreddit = subredditInput;
     const urlMatch = subreddit.match(/reddit\.com\/r\/([^/?\s]+)/);
     if (urlMatch) subreddit = urlMatch[1];
@@ -253,24 +250,35 @@ scrapeBtn.addEventListener("click", async () => {
           after,
           includeComments,
           skipIds: Array.from(seenIds),
+          timeFilter: mode === "top" ? timeFilter : undefined,
         });
 
-        const newPosts = batchResp.posts.filter((p) => !seenIds.has(p.id));
+        let newPosts = batchResp.posts.filter((p) => !seenIds.has(p.id));
+
+        // Apply NSFW filter client-side
+        if (skipNSFW) {
+          newPosts = newPosts.filter((p) => !p.over_18);
+        }
+
+        // Strip selftext if not wanted
+        if (!includeSelftext) {
+          newPosts.forEach((p) => { p.selftext = ""; });
+        }
+
         for (const p of newPosts) {
           seenIds.add(p.id);
           allPosts.push(p);
           modeFetched++;
         }
 
-        // Stop if Reddit has no more pages or we got nothing new
         if (batchResp.done || newPosts.length === 0) break;
         after = batchResp.after;
       }
     }
 
-    // Step 3: Keyword analysis (client-side — instant, no timeout)
-    if (!skipAnalysis) {
-      updateProgress("Analyzing keywords...", 95);
+    // Keyword analysis (optional)
+    if (keywordsEnabled) {
+      updateProgress("Running keyword analysis...", 95);
       for (const post of allPosts) {
         analyzePost(post, categories);
       }
@@ -281,17 +289,14 @@ scrapeBtn.addEventListener("click", async () => {
     scrapeResult = {
       subreddit,
       posts: allPosts,
-      summary: buildSummary(allPosts),
+      keywordsEnabled,
+      summary: buildSummary(allPosts, keywordsEnabled),
     };
 
     showResults(scrapeResult);
   } catch (err) {
     if (err.name === "AbortError") {
       updateProgress("Stopped by user.", null);
-      // Still show partial results if we have any
-      if (scrapeResult || (allPosts && allPosts.length > 0)) {
-        // scrapeResult may not be set yet, build from whatever we have
-      }
     } else {
       showError(err.message);
       progressSection.classList.add("hidden");
@@ -303,7 +308,6 @@ scrapeBtn.addEventListener("click", async () => {
   }
 });
 
-// Stop button
 stopBtn.addEventListener("click", () => {
   if (abortController) abortController.abort();
 });
@@ -319,18 +323,16 @@ function showResults(data) {
 
   const summaryDiv = document.getElementById("summary");
   let statsHtml = `
-    <div class="stat"><div class="value">${s.total_posts}</div><div class="label">Posts scraped</div></div>
-    <div class="stat"><div class="value">${s.total_comments}</div><div class="label">Comments collected</div></div>
+    <div class="stat-card"><div class="value">${s.total_posts.toLocaleString()}</div><div class="label">Posts</div></div>
+    <div class="stat-card"><div class="value">${s.total_comments.toLocaleString()}</div><div class="label">Comments</div></div>
+    <div class="stat-card"><div class="value">${s.total_score.toLocaleString()}</div><div class="label">Total score</div></div>
   `;
   if (s.posts_with_keyword_matches !== undefined) {
-    statsHtml += `
-      <div class="stat"><div class="value">${s.posts_with_keyword_matches}</div><div class="label">Posts with keyword matches</div></div>
-      <div class="stat"><div class="value">${s.comments_with_keyword_matches}</div><div class="label">Comments with keyword matches</div></div>
-    `;
+    statsHtml += `<div class="stat-card"><div class="value">${s.posts_with_keyword_matches}</div><div class="label">Keyword matches</div></div>`;
   }
-  if (s.posts_per_category && Object.keys(s.posts_per_category).length > 0) {
+  if (s.posts_per_category) {
     for (const [cat, count] of Object.entries(s.posts_per_category)) {
-      statsHtml += `<div class="stat"><div class="value">${count}</div><div class="label">${formatCategory(cat)}</div></div>`;
+      statsHtml += `<div class="stat-card"><div class="value">${count}</div><div class="label">${formatCategory(cat)}</div></div>`;
     }
   }
   summaryDiv.innerHTML = statsHtml;
@@ -342,8 +344,8 @@ function showResults(data) {
     .map(
       (p) => `
     <div class="preview-post">
-      <h3><a href="${p.permalink}" target="_blank">${escapeHtml(p.title)}</a></h3>
-      <div class="meta">by ${escapeHtml(p.author)} | Score: ${p.score} | ${p.num_comments} comments | ${new Date(p.created_datetime).toLocaleDateString()}</div>
+      <h3><a href="${p.permalink}" target="_blank" rel="noopener">${escapeHtml(p.title)}</a></h3>
+      <div class="meta">u/${escapeHtml(p.author)} &middot; ${p.score} pts &middot; ${p.num_comments} comments &middot; ${new Date(p.created_datetime).toLocaleDateString()}</div>
       ${
         p.matched_categories && p.matched_categories.length > 0
           ? `<div class="categories">${p.matched_categories.map((c) => `<span class="badge">${formatCategory(c)}</span>`).join("")}</div>`
@@ -365,7 +367,24 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
-// --- Download Buttons ---
+// --- Computed columns for analysis ---
+function wordCount(text) {
+  if (!text) return 0;
+  return text.trim().split(/\s+/).filter(Boolean).length;
+}
+
+function toDateParts(isoString) {
+  if (!isoString) return { date: "", day_of_week: "", hour: "" };
+  const d = new Date(isoString);
+  const days = ["Sunday", "Monday", "Tuesday", "Wednesday", "Thursday", "Friday", "Saturday"];
+  return {
+    date: d.toISOString().slice(0, 10),
+    day_of_week: days[d.getUTCDay()],
+    hour: d.getUTCHours(),
+  };
+}
+
+// --- Download Handlers ---
 document.getElementById("downloadJson").addEventListener("click", () => {
   if (!scrapeResult) return;
   downloadFile(
@@ -375,15 +394,15 @@ document.getElementById("downloadJson").addEventListener("click", () => {
   );
 });
 
-document.getElementById("downloadPostsCsv").addEventListener("click", () => {
+document.getElementById("downloadCsv").addEventListener("click", () => {
   if (!scrapeResult) return;
-  const csv = postsToCSV(scrapeResult.posts);
+  const csv = postsToCSV(scrapeResult.posts, scrapeResult.keywordsEnabled);
   downloadFile(csv, `reddit_${scrapeResult.subreddit}_posts.csv`, "text/csv");
 });
 
 document.getElementById("downloadCommentsCsv").addEventListener("click", () => {
   if (!scrapeResult) return;
-  const csv = commentsToCSV(scrapeResult.posts);
+  const csv = commentsToCSV(scrapeResult.posts, scrapeResult.keywordsEnabled);
   downloadFile(csv, `reddit_${scrapeResult.subreddit}_comments.csv`, "text/csv");
 });
 
@@ -406,48 +425,95 @@ function csvEscape(val) {
   return str;
 }
 
-function postsToCSV(posts) {
+function postsToCSV(posts, keywordsEnabled) {
   const headers = [
-    "id", "title", "selftext", "author", "created_datetime",
+    "id", "subreddit", "title", "selftext", "author",
+    "created_utc", "created_datetime", "date", "day_of_week", "hour_utc",
     "score", "upvote_ratio", "num_comments", "permalink",
-    "link_flair_text", "relevance_score", "matched_categories", "matched_keywords",
+    "link_flair_text", "title_word_count", "selftext_word_count",
+    "title_char_count", "selftext_char_count", "comment_count_actual",
   ];
-  const rows = posts.map((p) =>
-    headers.map((h) => {
-      if (h === "matched_categories") return csvEscape((p[h] || []).join(", "));
-      if (h === "matched_keywords") return csvEscape(JSON.stringify(p[h] || {}));
-      return csvEscape(p[h]);
-    }).join(",")
-  );
+  if (keywordsEnabled) {
+    headers.push("relevance_score", "matched_categories", "matched_keywords");
+  }
+
+  const rows = posts.map((p) => {
+    const dp = toDateParts(p.created_datetime);
+    const row = {
+      id: p.id,
+      subreddit: scrapeResult.subreddit,
+      title: p.title,
+      selftext: p.selftext,
+      author: p.author,
+      created_utc: p.created_utc,
+      created_datetime: p.created_datetime,
+      date: dp.date,
+      day_of_week: dp.day_of_week,
+      hour_utc: dp.hour,
+      score: p.score,
+      upvote_ratio: p.upvote_ratio,
+      num_comments: p.num_comments,
+      permalink: p.permalink,
+      link_flair_text: p.link_flair_text || "",
+      title_word_count: wordCount(p.title),
+      selftext_word_count: wordCount(p.selftext),
+      title_char_count: (p.title || "").length,
+      selftext_char_count: (p.selftext || "").length,
+      comment_count_actual: (p.comments || []).length,
+    };
+    if (keywordsEnabled) {
+      row.relevance_score = p.relevance_score || 0;
+      row.matched_categories = (p.matched_categories || []).join("; ");
+      row.matched_keywords = JSON.stringify(p.matched_keywords || {});
+    }
+    return headers.map((h) => csvEscape(row[h])).join(",");
+  });
+
   return [headers.join(","), ...rows].join("\n");
 }
 
-function commentsToCSV(posts) {
+function commentsToCSV(posts, keywordsEnabled) {
   const headers = [
-    "comment_id", "post_id", "post_title", "body", "author",
-    "created_datetime", "score", "parent_id", "is_submitter",
-    "relevance_score", "matched_categories", "matched_keywords",
+    "comment_id", "post_id", "subreddit", "post_title",
+    "body", "author", "created_utc", "created_datetime",
+    "date", "day_of_week", "hour_utc",
+    "score", "parent_id", "is_submitter",
+    "body_word_count", "body_char_count",
   ];
+  if (keywordsEnabled) {
+    headers.push("relevance_score", "matched_categories", "matched_keywords");
+  }
+
   const rows = [];
   for (const p of posts) {
     for (const c of p.comments || []) {
-      rows.push(
-        [
-          csvEscape(c.id),
-          csvEscape(p.id),
-          csvEscape(p.title),
-          csvEscape(c.body),
-          csvEscape(c.author),
-          csvEscape(c.created_datetime),
-          csvEscape(c.score),
-          csvEscape(c.parent_id),
-          csvEscape(c.is_submitter),
-          csvEscape(c.relevance_score || 0),
-          csvEscape((c.matched_categories || []).join(", ")),
-          csvEscape(JSON.stringify(c.matched_keywords || {})),
-        ].join(",")
-      );
+      const dp = toDateParts(c.created_datetime);
+      const row = {
+        comment_id: c.id,
+        post_id: p.id,
+        subreddit: scrapeResult.subreddit,
+        post_title: p.title,
+        body: c.body,
+        author: c.author,
+        created_utc: c.created_utc,
+        created_datetime: c.created_datetime,
+        date: dp.date,
+        day_of_week: dp.day_of_week,
+        hour_utc: dp.hour,
+        score: c.score,
+        parent_id: c.parent_id,
+        is_submitter: c.is_submitter,
+        body_word_count: wordCount(c.body),
+        body_char_count: (c.body || "").length,
+      };
+      if (keywordsEnabled) {
+        row.relevance_score = c.relevance_score || 0;
+        row.matched_categories = (c.matched_categories || []).join("; ");
+        row.matched_keywords = JSON.stringify(c.matched_keywords || {});
+      }
+      rows.push(headers.map((h) => csvEscape(row[h])).join(","));
     }
   }
+
   return [headers.join(","), ...rows].join("\n");
 }

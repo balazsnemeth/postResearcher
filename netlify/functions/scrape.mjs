@@ -27,9 +27,9 @@ async function fetchWithRetry(url, options = {}, retries = 3) {
   throw new Error("Rate limited by Reddit after multiple retries");
 }
 
-async function fetchListing(subreddit, sort, limit, after = null) {
+async function fetchListing(subreddit, sort, limit, after = null, timeFilter = "all") {
   let url = `${BASE_URL}/r/${subreddit}/${sort}.json?limit=${Math.min(limit, 100)}&raw_json=1`;
-  if (sort === "top") url += "&t=all";
+  if (sort === "top") url += `&t=${timeFilter}`;
   if (after) url += `&after=${after}`;
   return fetchWithRetry(url);
 }
@@ -83,6 +83,7 @@ function extractPost(postData) {
     url: p.url,
     permalink: `https://reddit.com${p.permalink}`,
     link_flair_text: p.link_flair_text || "",
+    over_18: p.over_18 || false,
     comments: [],
   };
 }
@@ -112,6 +113,7 @@ export async function handler(event) {
       after = null,
       includeComments = true,
       skipIds = [],
+      timeFilter = "all",
     } = body;
 
     let parsedSubreddit = (subreddit || "").trim();
@@ -126,7 +128,7 @@ export async function handler(event) {
     const seenIds = new Set(skipIds);
     const effectiveBatch = Math.min(includeComments ? batchSize : Math.min(batchSize, 100), 100);
 
-    const listing = await fetchListing(parsedSubreddit, sort, effectiveBatch, after);
+    const listing = await fetchListing(parsedSubreddit, sort, effectiveBatch, after, timeFilter);
 
     if (!listing.data || !listing.data.children || listing.data.children.length === 0) {
       return {
